@@ -1,5 +1,5 @@
 # Metti il nome del modello che vai a salvare qualcosa di sto tipo pls
-model_name = 'models/cub_SENet_10e_da.pth'
+model_name = 'models/cub_uuuaaa_2.pth'
 
 import torch
 import torch.nn as nn
@@ -10,6 +10,7 @@ import torch.optim as optim
 import os
 import time
 from torch.optim.lr_scheduler import StepLR
+from torchvision.models.resnet import Bottleneck, conv1x1
 
 # devo ancora capire bene sta rete ma 
 class SEBlock(nn.Module):
@@ -101,6 +102,22 @@ class SEResNet50(nn.Module):
         x = x.view(x.size(0), -1)
         x = self.fc(x)
         return x
+    
+    def _make_layer(self, block, planes, blocks, stride=1, reduction=8):  # Adjusted reduction ratio
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                conv1x1(self.inplanes, planes * block.expansion, stride),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample, reduction))  # Adjusted reduction ratio
+        self.inplanes = planes * block.expansion
+        for _ in range(1, blocks):
+            layers.append(block(self.inplanes, planes, reduction=reduction))  # Adjusted reduction ratio
+
+        return nn.Sequential(*layers)
 
 
 
@@ -131,7 +148,12 @@ def get_data_loaders(data_dir, batch_size=32,
     return train_loader, val_loader, test_loader
 
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=10, device='cuda'):
+def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, dropout, num_epochs=10, device='cuda'):
+
+    best_val_loss = float('inf')
+    patience = 3
+    counter = 0
+
     best_val_acc = 0.0
     for epoch in range(num_epochs):
         print("\n", '-'*10)
@@ -144,6 +166,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
             outputs = model(inputs)
+            outputs = dropout(outputs)
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
@@ -153,7 +176,18 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         train_acc = evaluate_model(model, train_loader, device)
         val_acc = evaluate_model(model, val_loader, device)
         
-        print(f'Epoch {epoch+1}/{num_epochs}, Loss: {epoch_loss:.4f}')
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for inputs, labels in val_loader:
+                inputs, labels = inputs.to(device), labels.to(device)
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item() * inputs.size(0)
+        val_loss /= len(val_loader.dataset)
+
+
+        print(f'Epoch {epoch+1}/{num_epochs}, Loss: {epoch_loss:.4f}, Val Loss: {val_loss:.4f}')
         print(f'Train Accuracy: {train_acc:.4f}, Val Accuracy: {val_acc:.4f}')
         print('Epoch trime: ', time.time()- e_start)
         
@@ -163,6 +197,15 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
 
         scheduler.step() 
         print('-'*10, "\n")
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            counter = 0
+        else:
+            counter += 1
+            if counter >= patience:
+                print(f'Validation loss did not improve for {patience} epochs. Early stopping...')
+                break
     
     print('Training complete. Best validation accuracy: {:.4f}'.format(best_val_acc))
 
@@ -183,10 +226,11 @@ def evaluate_model(model, data_loader, device='cuda'):
 
 
 
-data_dir = 'cub'  
+data_dir = 'Images'  
 batch_size = 64
 num_classes = len(os.listdir(os.path.join(data_dir, 'train')))
 num_epochs = 10
+dropout = nn.Dropout(p=0.5)
 
 
 train_loader, val_loader, test_loader = get_data_loaders(data_dir, batch_size)
@@ -198,14 +242,15 @@ model = SEResNet50(num_classes=num_classes).to(device)
 
 print("Pre trained model loaded")
 
+
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.0001)
+optimizer = optim.Adam(model.parameters(), lr=0.0001, weight_decay=0.0001)
 scheduler = StepLR(optimizer, step_size=5, gamma=0.1)
 
 print("Start training")
 start = time.time()
 
-train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs, device)
+train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, dropout, num_epochs, device)
 
 print("End training, time: ", time.time()-start)
 
