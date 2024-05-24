@@ -1,16 +1,18 @@
 # Metti il nome del modello che vai a salvare qualcosa di sto tipo pls
 model_name = 'models/cub_uuuaaa_2.pth'
 
+import unittest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models, datasets, transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, TensorDataset
 import torch.optim as optim
 import os
 import time
 from torch.optim.lr_scheduler import StepLR
 from torchvision.models.resnet import Bottleneck, conv1x1
+from torch.utils.tensorboard import SummaryWriter
 
 # devo ancora capire bene sta rete ma 
 class SEBlock(nn.Module):
@@ -121,6 +123,38 @@ class SEResNet50(nn.Module):
         return nn.Sequential(*layers)
 
 
+class TestModelTraining(unittest.TestCase):
+
+    def setUp(self):
+        # Dummy dataset
+        inputs = torch.randn(100, 3, 224, 224)  # 100 samples of 3x224x224 images
+        labels = torch.randint(0, 10, (100,))   # 100 labels for 10 classes
+        dataset = TensorDataset(inputs, labels)
+        
+        self.train_loader = DataLoader(dataset, batch_size=32, shuffle=True)
+        self.val_loader = DataLoader(dataset, batch_size=32, shuffle=False)
+
+        # Simple model for testing
+        self.model = torch.nn.Sequential(
+            torch.nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.Flatten(),
+            torch.nn.Linear(16 * 224 * 224, 10)
+        )
+        self.criterion = torch.nn.CrossEntropyLoss()
+        self.optimizer = torch.optim.Adam(self.model.parameters())
+        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=0.1)
+
+    def test_training(self):
+        train_model(self.model, self.train_loader, self.val_loader, self.criterion, self.optimizer, self.scheduler, num_epochs=2, device='cpu')
+        self.assertTrue(True)  # If the model trains without error, the test passes
+
+    def test_evaluation(self):
+        accuracy = evaluate_model(self.model, self.val_loader, device='cpu')
+        self.assertIsInstance(accuracy, float)  # Check if the returned accuracy is a float
+
+if __name__ == '__main__':
+    unittest.main()
 
 
 def get_data_loaders(data_dir, batch_size=32,
@@ -167,6 +201,7 @@ def get_data_loaders(data_dir, batch_size=32,
 
 def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=10, device='cuda', model_name='best_model.pth'):
 
+    writer = SummaryWriter()  # TensorBoard writer initialization
     best_val_loss = float('inf')
     patience = 3
     counter = 0
@@ -196,6 +231,12 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         # Validation phase
         val_loss, val_acc = evaluate_model(model, val_loader, criterion, device)
         
+        # Log the loss and accuracy to TensorBoard
+        writer.add_scalar('Loss/Train', epoch_loss, epoch)
+        writer.add_scalar('Loss/Validation', val_loss, epoch)
+        writer.add_scalar('Accuracy/Train', train_acc, epoch)
+        writer.add_scalar('Accuracy/Validation', val_acc, epoch)
+        
         print(f'Epoch {epoch+1}/{num_epochs}, Loss: {epoch_loss:.4f}, Val Loss: {val_loss:.4f}')
         print(f'Train Accuracy: {train_acc:.4f}, Val Accuracy: {val_acc:.4f}')
         print('Epoch time: ', time.time() - e_start)
@@ -218,9 +259,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
                 print(f'Validation loss did not improve for {patience} epochs. Early stopping...')
                 break
     
+    writer.close()
     print('Training complete. Best validation accuracy: {:.4f}'.format(best_val_acc))
-
-
 
 def evaluate_model(model, data_loader, criterion=None, device='cuda'):
     model.eval()
@@ -243,7 +283,6 @@ def evaluate_model(model, data_loader, criterion=None, device='cuda'):
         avg_loss = running_loss / len(data_loader.sampler)
         return avg_loss, accuracy
     return accuracy
-
 
 
 data_dir = 'Images'  
