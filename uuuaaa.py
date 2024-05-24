@@ -1,5 +1,5 @@
 # Metti il nome del modello che vai a salvare qualcosa di sto tipo pls
-model_name = 'models/cub_uuuaaa_2.pth'
+model_name = 'models/cub_uuuaaa_3.pth'
 
 import unittest
 import torch
